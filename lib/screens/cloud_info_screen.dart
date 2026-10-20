@@ -111,15 +111,32 @@ class CloudInfoScreen extends StatelessWidget {
 
 }
 
+/// Shared entry point for Settings and the dashboard enrollment badge.
+void goToCloud(
+  BuildContext context, {
+  bool? enableRfc7030,
+  Future<CloudConnectorState> Function()? readState,
+}) {
+  if (enableRfc7030 ?? rfc7030Enabled) {
+    Navigator.pushNamed(context, AppRoutes.configureCloudConnectionScreen);
+  } else {
+    goToOtpEnrollment(context, readState: readState);
+  }
+}
+
 /// Opens the OTP enrollment. If cloud-connector reports the charger as
 /// enrolled already, the user can choose between restart and re-enrollment.
-Future<void> goToOtpEnrollment(BuildContext context) async {
+Future<void> goToOtpEnrollment(
+  BuildContext context, {
+  Future<CloudConnectorState> Function()? readState,
+}) async {
+  final query = readState ?? CloudConnector.state;
   const route = AppRoutes.simpleCloudConfigScreen;
-  var state = await CloudConnector.state();
+  var state = await query();
   while (state == CloudConnectorState.notReady) {
     if (!context.mounted) return;
     if (!await showCloudConnectorNotReadyDialog(context)) return;
-    state = await CloudConnector.state();
+    state = await query();
   }
   if (!context.mounted) return;
   if (state == CloudConnectorState.enrolled) {

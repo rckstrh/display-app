@@ -117,7 +117,9 @@ class CloudConnector {
       final result = await _run(cloudConnectorPath, ["est", "status", "--format", "json"]);
       final response = CloudConnectorResponse.parse(
           result.stdout as String, result.exitCode);
-      if (!response.answered) return CloudConnectorState.notReady;
+      if (!response.success || response.data["enrolled"] is! bool) {
+        return CloudConnectorState.notReady;
+      }
       return response.enrolled
           ? CloudConnectorState.enrolled
           : CloudConnectorState.notEnrolled;
@@ -155,7 +157,7 @@ class CloudConnector {
 }
 
 enum CloudConnectorState {
-  /// service not active or daemon not answering
+  /// Service inactive, daemon not answering, or enrollment status unreadable.
   notReady,
   notEnrolled,
   enrolled,

@@ -388,14 +388,7 @@ class _ChargingDashboardScreenState
                 right: 10,
               ),
               child: FilledButton.icon(
-                onPressed: () {
-                  if (rfc7030Enabled) {
-                    Navigator.pushNamed(
-                        context, AppRoutes.configureCloudConnectionScreen);
-                  } else {
-                    goToOtpEnrollment(context);
-                  }
-                },
+                onPressed: () => goToCloud(context),
                 icon: Icon(Icons.cloud),
                 label: Text(
                   "Cloud", //TODO Localisation
@@ -605,6 +598,7 @@ class _ChargingDashboardScreenState
               BorderLayoutSlot.center: makeSessionInfoBody(context),
               BorderLayoutSlot.south: Footer(
                 isOnline: _online,
+                onCloudTap: () => goToCloud(context),
                 selectedProtocolString: selectedProtocolString,
               ),
             },
