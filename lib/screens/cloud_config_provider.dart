@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:display_app/screens/cloud_info_screen.dart';
+import 'package:display_app/utils/cloud_connector.dart';
 import 'package:display_app/utils/pionix_cloud_manager.dart';
 import 'package:display_app/widgets/empty.dart';
 import 'package:display_app/widgets/keyboard.dart';
@@ -327,8 +329,6 @@ class _SimpleConfigProviderState extends State<SimpleConfigProvider> {
   bool logVisible = false;
   final List<Widget> logEntries = [];
 
-  PionixCloudManager? config;
-
   late Widget otpInputField;
 
   static const double height = 56;
@@ -336,8 +336,8 @@ class _SimpleConfigProviderState extends State<SimpleConfigProvider> {
 
   String? otp;
 
-  ///The PID of the script process.
-  ///null => no script process is running at the moment
+  ///The PID of the cloud-connector / systemctl process.
+  ///null => no process is running at the moment
   int? scriptPid;
 
   bool _scriptSuccess = true;
@@ -364,27 +364,13 @@ class _SimpleConfigProviderState extends State<SimpleConfigProvider> {
 
   @override
   void initState() {
-    try {
-      if (configSupported) {
-        //disable this for debugging:
-        config = PionixCloudManager.loadFile(cloudConfigFile);
-
-        // for debugging only:
-        // config = PionixCloudManager(debugConfig);
-      } else {
-        config = null;
-      }
-    } catch (e) {
-      config = null;
-    }
-
     otpInputField = OtpInputField(
       onTextChanged: attemptSetOtp,
       onTap: openKeyboard,
     );
 
     if (widget.mode == EnrollMode.restart) {
-      submit();
+      WidgetsBinding.instance.addPostFrameCallback((_) => submit());
     }
     super.initState();
   }
@@ -398,12 +384,6 @@ class _SimpleConfigProviderState extends State<SimpleConfigProvider> {
     setState(() {
       logEntries.add(text);
     });
-  }
-
-  void assembleDataEntry(List<int> data, bool isError) {
-    var msg = String.fromCharCodes(data);
-    msg = msg.substring(0, msg.length - 1); //Cut out trailing linefeed
-    assembleStringEntry(msg, isError);
   }
 
   Future<void> submit() async {
@@ -421,52 +401,51 @@ class _SimpleConfigProviderState extends State<SimpleConfigProvider> {
       });
       return;
     }
-    // We don't need the script exists check at this point anymore as it's done elsewhere
-    final List<String> args = switch (widget.mode) {
-      EnrollMode.normal => ["--otp-code", otp!],
-      EnrollMode.restart => ["--restart-only"],
-      EnrollMode.reEnroll => ["--re-enroll", "--otp-code", otp!],
-    };
-    var proc = await Process.start(
-      scriptPath,
-      args,
-    );
+    final bool restart = widget.mode == EnrollMode.restart;
+    final Process proc;
+    try {
+      proc = restart
+          ? await Process.start("systemctl", CloudConnector.restartArgs)
+          : await Process.start(cloudConnectorPath, CloudConnector.enrollArgs(otp!));
+    } catch (e) {
+      setState(() {
+        assembleStringEntry("Failed to start cloud-connector: $e", true);
+        logVisible = true;
+        _scriptSuccess = false;
+        scriptPid = null;
+      });
+      return;
+    }
     setState(() {
       scriptPid = proc.pid;
       logVisible = true;
     });
-    proc.stdout.listen((event) => assembleDataEntry(event, false));
-    proc.stderr.listen((event) => assembleDataEntry(event, true));
-    proc.exitCode.then(
-      (value) {
-        setState(() {
-          _scriptSuccess = value == 0;
-          scriptPid = null;
-        });
-      },
-      onError: (value) {
-        setState(() {
-          _scriptSuccess = false;
-          scriptPid = null;
-        });
-      }
-    );
-    debugPrint("connection to cloud attempted.");
+    assembleStringEntry(restart ? "Restarting cloud connection..." : "Enrolling charger...", false);
+    final stdout = proc.stdout.transform(utf8.decoder).join();
+    final stderr = proc.stderr.transform(utf8.decoder).join();
+    final exitCode = await proc.exitCode;
+    final response = restart
+        ? CloudConnectorResponse.fromExitCode(exitCode, await stderr)
+        : CloudConnectorResponse.parse(await stdout, exitCode);
+    if (!mounted) return;
+    if (response.success) {
+      assembleStringEntry(restart ? "Cloud connection restarted" : "Charger enrolled successfully", false);
+    } else {
+      debugPrint("cloud-connector failed: ${response.error}\n${await stderr}");
+      assembleStringEntry(response.error, true);
+    }
+    setState(() {
+      _scriptSuccess = response.success;
+      scriptPid = null;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: PionixAppBar('Connect to Cloud using OTP', hideBackButton: logVisible && scriptSuccess == null,),
-      floatingActionButton: (!configSupported || keyboardVisible) ? null :
-        FloatingActionButton(
-          child: Icon(Icons.settings),
-          onPressed: () {
-            Navigator.pushNamed(context, AppRoutes.simpleFurtherSettingsScreen, arguments: ConfigArgWrapper(config!));
-          },
-        ),
       body: Visibility(
-        visible: (!configSupported || configSupported && config != null) && checkFileExists(scriptPath),
+        visible: CloudConnector.available,
         replacement: Center(
           child: Text(
             "Cloud connection not available",
