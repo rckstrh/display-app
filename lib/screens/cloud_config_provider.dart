@@ -342,12 +342,15 @@ class _SimpleConfigProviderState extends State<SimpleConfigProvider> {
 
   bool _scriptSuccess = true;
 
+  /// Whether we're waiting for the cloud-connector daemon to answer after a restart.
+  bool waitingForDaemon = false;
+
   /// Whether the script has succeeded or is running.
   /// true => script has succeeded / Script has not been run
   /// null => script is running
   /// false => script has been run and failed
   bool? get scriptSuccess {
-    if (scriptPid != null) return null;
+    if (scriptPid != null || waitingForDaemon) return null;
     return _scriptSuccess;
   }
 
@@ -402,6 +405,10 @@ class _SimpleConfigProviderState extends State<SimpleConfigProvider> {
       return;
     }
     final bool restart = widget.mode == EnrollMode.restart;
+    if (!restart && !await CloudConnector.isReady()) {
+      if (!mounted || !await showCloudConnectorNotReadyDialog(context)) return;
+      if (!mounted) return;
+    }
     final Process proc;
     try {
       proc = restart
@@ -424,10 +431,28 @@ class _SimpleConfigProviderState extends State<SimpleConfigProvider> {
     final stdout = proc.stdout.transform(utf8.decoder).join();
     final stderr = proc.stderr.transform(utf8.decoder).join();
     final exitCode = await proc.exitCode;
-    final response = restart
+    var response = restart
         ? CloudConnectorResponse.fromExitCode(exitCode, await stderr)
         : CloudConnectorResponse.parse(await stdout, exitCode);
     if (!mounted) return;
+    if (restart && response.success) {
+      setState(() {
+        waitingForDaemon = true;
+        scriptPid = null;
+      });
+      assembleStringEntry("Waiting for the cloud connector to start...", false);
+      final ready = await CloudConnector.waitUntilReady(
+          cancelled: () => !mounted || !waitingForDaemon);
+      // aborted by the user (or screen closed)
+      if (!mounted || !waitingForDaemon) return;
+      waitingForDaemon = false;
+      if (!ready) {
+        response = CloudConnectorResponse(
+          success: false,
+          error: "The cloud connector did not become ready within ${CloudConnector.startupTimeout.inSeconds} seconds.",
+        );
+      }
+    }
     if (response.success) {
       assembleStringEntry(restart ? "Cloud connection restarted" : "Charger enrolled successfully", false);
     } else {
@@ -476,6 +501,12 @@ class _SimpleConfigProviderState extends State<SimpleConfigProvider> {
                     case null:
                       if (scriptPid != null) {
                         Process.killPid(scriptPid!);
+                      } else if (waitingForDaemon) {
+                        assembleStringEntry("Aborted waiting for the cloud connector", true);
+                        setState(() {
+                          waitingForDaemon = false;
+                          _scriptSuccess = false;
+                        });
                       } else {
                         //We should never get here
                         assembleStringEntry("Failed to find process, could not kill", true);

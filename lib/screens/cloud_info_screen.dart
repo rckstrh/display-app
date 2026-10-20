@@ -115,9 +115,14 @@ class CloudInfoScreen extends StatelessWidget {
 /// enrolled already, the user can choose between restart and re-enrollment.
 Future<void> goToOtpEnrollment(BuildContext context) async {
   const route = AppRoutes.simpleCloudConfigScreen;
-  final enrolled = await CloudConnector.isEnrolled();
+  var state = await CloudConnector.state();
+  while (state == CloudConnectorState.notReady) {
+    if (!context.mounted) return;
+    if (!await showCloudConnectorNotReadyDialog(context)) return;
+    state = await CloudConnector.state();
+  }
   if (!context.mounted) return;
-  if (enrolled) {
+  if (state == CloudConnectorState.enrolled) {
     showAlreadyEnrolledDialog(
       context,
       route: route,
@@ -199,4 +204,140 @@ enum EnrollMode {
   normal,
   restart,
   reEnroll,
+}
+
+/// Shown if the cloud-connector service is not active or its daemon doesn't
+/// answer yet. Lets the user restart the service or wait for it to start up.
+/// Returns true once cloud-connector is ready.
+Future<bool> showCloudConnectorNotReadyDialog(BuildContext context) async {
+  final ready = await showGeneralDialog<bool>(
+    context: context,
+    barrierLabel: "cloud_connector_not_ready_barrier",
+    barrierDismissible: false,
+    pageBuilder: (context, animation, secondaryAnimation) =>
+        const CloudConnectorNotReadyDialog(),
+  );
+  return ready ?? false;
+}
+
+class CloudConnectorNotReadyDialog extends StatefulWidget {
+  const CloudConnectorNotReadyDialog({super.key});
+
+  @override
+  State<CloudConnectorNotReadyDialog> createState() => _CloudConnectorNotReadyDialogState();
+}
+
+class _CloudConnectorNotReadyDialogState extends State<CloudConnectorNotReadyDialog> {
+  bool waiting = false;
+  String? error;
+
+  /// Incremented on cancel, so a running wait can tell it's been cancelled.
+  int attempt = 0;
+
+  Future<void> waitForReady({required bool restart}) async {
+    final currentAttempt = ++attempt;
+    bool cancelled() => !mounted || attempt != currentAttempt;
+    setState(() {
+      waiting = true;
+      error = null;
+    });
+    if (restart) {
+      final response = await CloudConnector.restartService();
+      if (cancelled()) return;
+      if (!response.success) {
+        setState(() {
+          waiting = false;
+          error = "Restarting the cloud connector failed: ${response.error}";
+        });
+        return;
+      }
+    }
+    final ready = await CloudConnector.waitUntilReady(cancelled: cancelled);
+    if (!mounted || cancelled()) return;
+    if (ready) {
+      Navigator.of(context).pop(true);
+    } else {
+      setState(() {
+        waiting = false;
+        error = "The cloud connector did not become ready within ${CloudConnector.startupTimeout.inSeconds} seconds.";
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      child: SizedBox(
+        height: 300,
+        width: 500,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            spacing: 24,
+            children: [
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: waiting ? null : () => Navigator.of(context).pop(false),
+                    icon: Icon(Icons.arrow_back),
+                  ),
+                  Expanded(
+                    child: Text(
+                      "Cloud connector not ready",
+                      style: Theme.of(context).textTheme.headlineMedium,
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ],
+              ),
+              Expanded(
+                child: Center(
+                  child: waiting
+                      ? Column(
+                          mainAxisSize: MainAxisSize.min,
+                          spacing: 12,
+                          children: [
+                            CircularProgressIndicator(),
+                            Text(
+                              "Waiting for the cloud connector to start...",
+                              style: Theme.of(context).textTheme.bodyLarge,
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        )
+                      : Text(
+                          error ?? "The cloud connector service is not running or still starting up. Do you want to restart it or wait for it to start?",
+                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                            color: (error != null) ? Theme.of(context).colorScheme.error : null,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                ),
+              ),
+              if (waiting)
+                ElevatedButton(
+                  onPressed: () => setState(() {
+                    attempt++;
+                    waiting = false;
+                  }),
+                  child: Text("Cancel"),
+                )
+              else ...[
+                ElevatedButton(
+                  onPressed: () => waitForReady(restart: true),
+                  child: Text("(re)start cloud connector"),
+                ),
+                ElevatedButton(
+                  onPressed: () => waitForReady(restart: false),
+                  child: Text("wait for startup"),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

@@ -106,4 +106,16 @@ void main() {
     expect(failed.success, false);
     expect(failed.error, "Unit not found.");
   });
+
+  test("valid json means the daemon answered", () {
+    expect(CloudConnectorResponse.parse(statusEnrolled, 0).answered, true);
+    expect(CloudConnectorResponse.parse(statusNotEnrolled, 0).answered, true);
+    expect(CloudConnectorResponse.parse(enrollFailure, 1).answered, true);
+  });
+
+  test("invalid output means the daemon did not answer", () {
+    expect(CloudConnectorResponse.parse("", 1).answered, false);
+    expect(CloudConnectorResponse.parse("unknown command \"est\"\n", 1).answered, false);
+    expect(CloudConnectorResponse.fromExitCode(0, "").answered, false);
+  });
 }
