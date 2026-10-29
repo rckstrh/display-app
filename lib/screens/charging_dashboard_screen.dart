@@ -63,6 +63,11 @@ class _ChargingDashboardScreenState
   double _minCurrentA = 6.0;
   double _maxCurrentA = 32.0;
   bool _online = false;
+  // Setup checks connectivity only when asked. At boot that can happen before
+  // the network is up, so ask again periodically instead of keeping a stale
+  // "offline" (also follows Wi-Fi going away and coming back later).
+  static const _onlineCheckInterval = Duration(seconds: 30);
+  Timer? _onlineCheckTimer;
   String connector = connectorDefault;
 
   bool _showProgressBar = false;
@@ -88,6 +93,12 @@ class _ChargingDashboardScreenState
 
     _connectMqtt();
     super.initState();
+  }
+
+  @override
+  void dispose() {
+    _onlineCheckTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -710,8 +721,12 @@ class _ChargingDashboardScreenState
       await mqtt.connect();
       mqtt.subscribe(
           "everest_api/setup/var/supported_setup_features", parseConfigInfo);
-      checkOnlineStatus();
+      // subscribe first so the answer to the first check is not missed
       mqtt.subscribe("everest_api/setup/var/online_status", parseOnlineStatus);
+      checkOnlineStatus();
+      _onlineCheckTimer?.cancel();
+      _onlineCheckTimer =
+          Timer.periodic(_onlineCheckInterval, (_) => checkOnlineStatus());
       mqtt.subscribe(
           "everest_api/ev_manager/var/session_info", parseEvManagerSessionInfo);
     } catch (e) {
