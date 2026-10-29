@@ -51,6 +51,16 @@ String statusNotEnrolled = """
 }
 """;
 
+String statusRateLimited = """
+{
+  "data": {},
+  "error": "rate limit exceeded — try again in 60 seconds",
+  "request_id": "cli-2265",
+  "success": false,
+  "type": "response"
+}
+""";
+
 void main() {
   test("successful enrollment is parsed", () {
     final response = CloudConnectorResponse.parse(enrollSuccess, 0);
@@ -117,5 +127,30 @@ void main() {
     expect(CloudConnectorResponse.parse("", 1).answered, false);
     expect(CloudConnectorResponse.parse("unknown command \"est\"\n", 1).answered, false);
     expect(CloudConnectorResponse.fromExitCode(0, "").answered, false);
+  });
+
+  test("rate limit refusal is recognised", () {
+    final response = CloudConnectorResponse.parse(statusRateLimited, 1);
+    expect(response.success, false);
+    expect(response.answered, true);
+    expect(response.rateLimited, true);
+    expect(response.enrolled, false);
+  });
+
+  test("other failures are not rate limited", () {
+    expect(CloudConnectorResponse.parse(enrollFailure, 1).rateLimited, false);
+    expect(CloudConnectorResponse.parse(statusEnrolled, 0).rateLimited, false);
+    expect(CloudConnectorResponse.parse("", 1).rateLimited, false);
+  });
+
+  test("ping reports a running daemon", () {
+    expect(CloudConnectorResponse.parsePing('{\n  "running": true\n}\n', 0), true);
+  });
+
+  test("ping reports a stopped daemon", () {
+    expect(CloudConnectorResponse.parsePing('{\n  "running": false\n}\n', 4), false);
+    expect(CloudConnectorResponse.parsePing('{"running": true}', 4), false);
+    expect(CloudConnectorResponse.parsePing("", 1), false);
+    expect(CloudConnectorResponse.parsePing("garbage", 0), false);
   });
 }

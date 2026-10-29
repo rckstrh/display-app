@@ -151,14 +151,15 @@ void main() {
     expect(find.text('Cloud: Unknown'), findsOneWidget);
     await tester.tap(find.text('Cloud: Unknown'));
     expect(taps, 1);
-    await tester.pump(const Duration(seconds: 30));
+    const interval = CloudConnector.statusPollInterval;
+    await tester.pump(interval * 2);
     expect(calls, 1); // A slow check must never overlap another check.
     pending.complete(CloudConnectorState.enrolled);
     await tester.pump();
     await tester.pump();
     expect(find.text('Cloud: Enrolled'), findsOneWidget);
     pending = Completer<CloudConnectorState>();
-    await tester.pump(const Duration(seconds: 9));
+    await tester.pump(interval - const Duration(seconds: 1));
     expect(calls, 1);
     await tester.pump(const Duration(seconds: 1));
     expect(calls, 2);
@@ -167,13 +168,13 @@ void main() {
     await tester.pump();
     expect(find.text('Cloud: Not enrolled'), findsOneWidget);
     pending = Completer<CloudConnectorState>();
-    await tester.pump(const Duration(seconds: 10));
+    await tester.pump(interval);
     pending.completeError(StateError('cannot read status'));
     await tester.pump();
     await tester.pump();
     expect(find.text('Cloud: Unknown'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
-    await tester.pump(const Duration(seconds: 30));
+    await tester.pump(interval * 2);
     expect(calls, 3);
   });
 

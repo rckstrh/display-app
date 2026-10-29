@@ -13,7 +13,8 @@ final cloudConnectorStateQueryProvider =
   (ref) => CloudConnector.state,
 );
 
-/// Checks immediately, then waits ten seconds after each completed check.
+/// Checks immediately, then waits [CloudConnector.statusPollInterval] after each
+/// completed check.
 final cloudEnrollmentProvider =
     StreamProvider.autoDispose<CloudConnectorState>((ref) {
   if (!ref.watch(cloudConnectorAvailableProvider)) return const Stream.empty();
@@ -31,7 +32,7 @@ final cloudEnrollmentProvider =
     }
     if (disposed) return;
     controller.add(state);
-    timer = Timer(const Duration(seconds: 10), check);
+    timer = Timer(CloudConnector.statusPollInterval, check);
   }
 
   ref.onDispose(() {

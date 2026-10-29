@@ -67,6 +67,21 @@ class CloudConnectorResponse {
 
   /// Only meaningful for the response of `est status`.
   bool get enrolled => success && data["enrolled"] == true;
+
+  /// cloud-connector allows only a few plugin calls (like `est status` or
+  /// `est enroll`) per minute and caller, and refuses the rest.
+  bool get rateLimited => !success && error.startsWith("rate limit exceeded");
+
+  /// Parses the output of `cloud-connector ping --format json`, which has no
+  /// response envelope: `{"running": true}`.
+  static bool parsePing(String output, int exitCode) {
+    try {
+      final json = jsonDecode(output);
+      return exitCode == 0 && json is Map<String, dynamic> && json["running"] == true;
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 class CloudConnector {
@@ -86,6 +101,14 @@ class CloudConnector {
   static const Duration commandTimeout = Duration(seconds: 10);
   static const Duration pollInterval = Duration(seconds: 2);
   static const Duration startupTimeout = Duration(seconds: 60);
+
+  /// How often the footer asks `est status`. cloud-connector allows 5 plugin
+  /// calls per minute and caller, and the enrollment itself needs some of them.
+  static const Duration statusPollInterval = Duration(seconds: 30);
+
+  /// Last state read from `est status`, reused while cloud-connector refuses
+  /// the call because of its rate limit.
+  static CloudConnectorState? _lastState;
 
   /// Runs a command and kills it if it doesn't finish within [timeout].
   static Future<ProcessResult> _run(String executable, List<String> args,
@@ -117,10 +140,14 @@ class CloudConnector {
       final result = await _run(cloudConnectorPath, ["est", "status", "--format", "json"]);
       final response = CloudConnectorResponse.parse(
           result.stdout as String, result.exitCode);
-      if (!response.success || response.data["enrolled"] is! bool) {
-        return CloudConnectorState.notReady;
+      if (response.rateLimited) {
+        debugPrint("cloud-connector status rate limited, keeping $_lastState");
+        return _lastState ?? CloudConnectorState.notReady;
       }
-      return response.enrolled
+      if (!response.success || response.data["enrolled"] is! bool) {
+        return _lastState = CloudConnectorState.notReady;
+      }
+      return _lastState = response.enrolled
           ? CloudConnectorState.enrolled
           : CloudConnectorState.notEnrolled;
     } catch (e) {
@@ -129,8 +156,19 @@ class CloudConnector {
     }
   }
 
-  static Future<bool> isReady() async =>
-      await state() != CloudConnectorState.notReady;
+  /// Whether the daemon answers. Uses `ping`, which, unlike `est status`,
+  /// does not count against cloud-connector's rate limit, so it can be polled.
+  static Future<bool> isReady() async {
+    if (!await isServiceActive()) return false;
+    try {
+      final result = await _run(cloudConnectorPath, ["ping", "--format", "json"]);
+      return CloudConnectorResponse.parsePing(
+          result.stdout as String, result.exitCode);
+    } catch (e) {
+      debugPrint("Failed to ping cloud-connector: $e");
+      return false;
+    }
+  }
 
   /// Polls until the daemon is ready. Returns false on timeout or if
   /// [cancelled] returns true.
